@@ -1,0 +1,164 @@
+rules_version = '2';
+
+// ───────────────────────────────────────────────────────────────
+// Living Design Lab Firestore 보안 규칙
+//
+// ⚠️ 반드시 고칠 곳: 아래 adminEmails() 안의 PROFESSOR_EMAIL@example.com 을
+//    교수님의 Google 로그인 이메일로 바꾸세요. (여러 명이면 쉼표로 추가)
+//    Netlify 환경변수 VITE_ADMIN_EMAILS 와 같은 이메일이어야 합니다.
+//
+// 이 내용을 Firebase 콘솔 > Firestore Database > 규칙 탭에 붙여 넣고 [게시]를 누르세요.
+// ───────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function adminEmails() {
+      return ['PROFESSOR_EMAIL@example.com'];
+    }
+
+    function signedIn() {
+      return request.auth != null;
+      // [선택] 학교 이메일만 허용하려면 위 줄을 지우고 아래 줄의 주석(//)을 푸세요.
+      // return request.auth != null && request.auth.token.email.matches('.*@school[.]ac[.]kr$');
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in adminEmails();
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isStringOfSize(value, min, max) {
+      return value is string && value.size() >= min && value.size() <= max;
+    }
+
+    // 외부 URL 목록: 최대 5개, 각 항목은 http(s):// 로 시작하는 2000자 이하 문자열
+    function isUrlList(value) {
+      return value is list
+        && value.size() <= 5
+        && (value.size() < 1 || isUrl(value[0]))
+        && (value.size() < 2 || isUrl(value[1]))
+        && (value.size() < 3 || isUrl(value[2]))
+        && (value.size() < 4 || isUrl(value[3]))
+        && (value.size() < 5 || isUrl(value[4]));
+    }
+
+    function isUrl(value) {
+      return value is string && value.size() <= 2000 && value.matches('^https?://.+');
+    }
+
+    // 모든 읽기는 로그인한 사용자만 가능합니다.
+    // [선택] 비로그인 방문자도 보게 하려면 각 match 의 `allow read: if signedIn();` 을
+    //        `allow read: if true;` 로 바꾸세요. (단, 웹사이트 화면도 함께 고쳐야 합니다)
+
+    // ── users ──────────────────────────────────
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if isSelf(uid)
+        && request.resource.data.keys().hasOnly(['displayName', 'email', 'photoURL', 'createdAt'])
+        && isStringOfSize(request.resource.data.displayName, 0, 100)
+        && isStringOfSize(request.resource.data.email, 0, 200)
+        && isStringOfSize(request.resource.data.photoURL, 0, 2000)
+        && request.resource.data.createdAt == request.time;
+      allow update: if isSelf(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'email', 'photoURL'])
+        && isStringOfSize(request.resource.data.displayName, 0, 100)
+        && isStringOfSize(request.resource.data.email, 0, 200)
+        && isStringOfSize(request.resource.data.photoURL, 0, 2000);
+      allow delete: if false;
+    }
+
+    // ── courses ────────────────────────────────
+    function isValidCourse(data) {
+      return data.keys().hasOnly(['title', 'semester', 'description', 'createdAt', 'createdBy'])
+        && isStringOfSize(data.title, 1, 100)
+        && isStringOfSize(data.semester, 0, 20)
+        && isStringOfSize(data.description, 0, 2000);
+    }
+
+    match /courses/{courseId} {
+      allow read: if signedIn();
+      allow create: if isAdmin()
+        && isValidCourse(request.resource.data)
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time;
+      allow update: if isAdmin()
+        && isValidCourse(request.resource.data)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin();
+    }
+
+    // ── posts ──────────────────────────────────
+    function isValidPostContent(data) {
+      return isStringOfSize(data.title, 1, 100)
+        && isStringOfSize(data.content, 0, 5000)
+        && isUrlList(data.imageUrls)
+        && isUrlList(data.links)
+        && isStringOfSize(data.authorName, 0, 100)
+        && isStringOfSize(data.authorPhoto, 0, 2000);
+    }
+
+    match /posts/{postId} {
+      allow read: if signedIn();
+
+      // material(수업 자료)은 교수만, work(학생 작품)는 로그인 사용자 누구나 작성
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+             'courseId', 'type', 'title', 'content', 'imageUrls', 'links',
+             'authorId', 'authorName', 'authorPhoto', 'commentCount', 'createdAt', 'updatedAt'])
+        && (request.resource.data.type == 'work'
+            || (request.resource.data.type == 'material' && isAdmin()))
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.courseId is string
+        && exists(/databases/$(database)/documents/courses/$(request.resource.data.courseId))
+        && isValidPostContent(request.resource.data)
+        && request.resource.data.commentCount == 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      // 작성자 또는 교수의 글 수정: 제목/본문/이미지/링크/수정시각만 바꿀 수 있음
+      // (authorId, type, courseId, commentCount, createdAt 은 수정 불가)
+      allow update: if signedIn()
+        && (resource.data.authorId == request.auth.uid || isAdmin())
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['title', 'content', 'imageUrls', 'links', 'updatedAt'])
+        && isValidPostContent(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+
+      // 댓글 수(commentCount)만 ±1 바꾸는 업데이트는 로그인 사용자 누구나 가능 (댓글 작성/삭제용)
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['commentCount'])
+        && request.resource.data.commentCount is int
+        && request.resource.data.commentCount >= 0
+        && (request.resource.data.commentCount == resource.data.commentCount + 1
+            || request.resource.data.commentCount == resource.data.commentCount - 1);
+
+      allow delete: if signedIn()
+        && (resource.data.authorId == request.auth.uid || isAdmin());
+
+      // ── comments ─────────────────────────────
+      match /comments/{commentId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['content', 'authorId', 'authorName', 'authorPhoto', 'createdAt'])
+          && request.resource.data.authorId == request.auth.uid
+          && isStringOfSize(request.resource.data.content, 1, 1000)
+          && isStringOfSize(request.resource.data.authorName, 0, 100)
+          && isStringOfSize(request.resource.data.authorPhoto, 0, 2000)
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        // 댓글 작성자, 교수, 그리고 게시물 작성자(본인 글을 지울 때 달린 댓글도 함께 정리하기 위해)
+        allow delete: if signedIn()
+          && (resource.data.authorId == request.auth.uid
+              || isAdmin()
+              || get(/databases/$(database)/documents/posts/$(postId)).data.authorId == request.auth.uid);
+      }
+    }
+  }
+}
