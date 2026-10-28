@@ -126,6 +126,7 @@
    | `VITE_FIREBASE_APP_ID` | `appId` 값 |
    | `VITE_FIREBASE_MESSAGING_SENDER_ID` | `messagingSenderId` 값 |
    | `VITE_ADMIN_EMAILS` | 교수님 Google 이메일 (여러 명이면 `a@gmail.com,b@gmail.com`) |
+   | `SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES` | `apiKey` 값 (한 번 더). Netlify가 공개용 Firebase 키를 비밀번호로 오인해 배포를 막는 것을 방지 |
 
    **Import from a .env file** 로 붙여 넣을 때의 예:
    ```
@@ -135,7 +136,9 @@
    VITE_FIREBASE_APP_ID=1:1234567890:web:abcd...
    VITE_FIREBASE_MESSAGING_SENDER_ID=1234567890
    VITE_ADMIN_EMAILS=professor@gmail.com
+   SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES=AIza....
    ```
+   > **"Contains secret values"(비밀 값) 체크는 하지 마세요.** 이 값들은 웹사이트에 그대로 들어가는 공개용이라, 비밀로 표시하면 Netlify가 배포를 막습니다.
 3. **Deploys → Trigger deploy → Deploy site** 를 눌러 다시 배포합니다.
    *(환경변수는 다시 배포해야 반영됩니다)*
 4. 배포가 끝나면 사이트 상단의 데모 배너가 사라지고, 로그인 화면에 **Google 계정으로 로그인** 버튼이 나타납니다.
@@ -212,6 +215,7 @@
 | 버튼은 보이는데 저장 시 "권한이 없습니다" | `VITE_ADMIN_EMAILS`(화면용)와 `firestore.rules` 의 `adminEmails()`(실제 권한) 이메일이 같은지 확인. |
 | 환경변수를 넣었는데 아직 데모 모드 | 변수 이름 철자(`VITE_` 로 시작) 확인 후 **다시 배포**. 변수는 배포할 때 반영됩니다. |
 | "데이터베이스 인덱스가 필요합니다" | ⑧단계. |
+| Netlify 배포 로그에 `Secrets scanning found secrets in build` / 배포 실패 | 환경변수 `SECRETS_SCAN_SMART_DETECTION_OMIT_VALUES` 에 `apiKey` 값을 넣고, 변수의 "Contains secret values" 체크를 해제한 뒤 다시 배포. |
 | 새로고침하면 "Page not found" | `netlify.toml` 이 저장소 최상위에 있는지 확인. |
 | 이미지가 "이미지를 불러올 수 없습니다"로 나옴 | 주소가 이미지 파일 주소인지 확인. Google Drive는 파일 공유를 **'링크가 있는 모든 사용자'** 로 바꿔야 합니다. |
 | "오늘 무료 사용량을 모두 썼습니다" | Spark 요금제 하루 한도(읽기 5만 회 등) 초과. 다음 날(태평양 시간 자정) 자동 초기화됩니다. |
